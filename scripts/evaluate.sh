@@ -8,7 +8,7 @@
 #   1  plan denied by one or more rules
 #   2  evaluation failed (bad input, policy error); see stderr
 # The Application Registry is called at $APPID_SERVICE_URL (falls back to the
-# default in policies/guardrails.rego).
+# default in policies/terraform/guardrails/guardrails.rego).
 set -euo pipefail
 
 PLAN="${1:?usage: $0 <plan.json> [decision.json]}"

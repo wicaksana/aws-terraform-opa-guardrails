@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# `opa eval` regression tests for policies/guardrails.rego:
+# `opa eval` regression tests for policies/terraform/guardrails/guardrails.rego:
 #   tests/compliant/*.json     must produce no violations
 #   tests/noncompliant/*.json  must only violate the rule in the file name
 #                              (e.g. tag-002-*.json -> TAG-002)
