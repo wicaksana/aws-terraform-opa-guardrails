@@ -1,0 +1,265 @@
+name: terraform-guardrails
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: 1.17.0
+  TFLINT_VERSION: v0.65.0
+  OPA_VERSION: 1.21.4
+  REGAL_VERSION: v0.43.0
+  TF_DIR: .
+  TF_VAR_FILE: terraform.tfvars
+  TF_STATE_KEY: guardrails-demo/demo.tfstate
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff "$TF_DIR"
+
+      - name: terraform validate
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+
+      - name: tflint
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }} 
+        run: |
+          tflint --init
+          tflint --format compact
+
+      - uses: open-policy-agent/setup-opa@v2
+        with:
+          version: ${{ env.OPA_VERSION }}
+
+      - name: opa fmt + strict check
+        run: |
+          opa fmt --list --fail policies
+          opa check --strict policies
+
+      - name: Regal lint
+        run: |
+          curl -fsSL -o /usr/local/bin/regal \
+            "https://github.com/open-policy-agent/regal/releases/download/${REGAL_VERSION}/regal_Linux_x86_64"
+          chmod +x /usr/local/bin/regal
+          regal lint --format github policies
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      # - name: ruff
+      #   run: |
+      #     pip install --quiet ruff
+      #     ruff check appid-service
+      #     ruff format --check appid-service
+
+      # - name: hadolint
+      #   uses: hadolint/hadolint-action@v3.5.0
+      #   with:
+      #     dockerfile: appid-service/Dockerfile
+
+      # - name: shellcheck
+      #   run: shellcheck scripts/*.sh
+
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: open-policy-agent/setup-opa@v2
+        with:
+          version: ${{ env.OPA_VERSION }}
+
+      - name: opa test (http.send mocked)
+        run: opa test policies -v
+
+      # shell: bash adds pipefail, so a coverage miss is not hidden by jq.
+      - name: opa test coverage >= 90%
+        shell: bash
+        run: opa test policies --coverage --threshold 90 --format json | jq '{coverage}'
+
+      # - uses: actions/setup-python@v7
+      #   with:
+      #     python-version: "3.13"
+
+      # - name: appid-service unit tests
+      #   working-directory: appid-service
+      #   run: python -m unittest -v
+
+      - name: Start Application Registry (docker)
+        uses: ./.github/actions/start-registry
+
+      - name: opa eval regression cases (live registry)
+        env:
+          APPID_SERVICE_URL: http://localhost:8080
+        run: scripts/eval-cases.sh
+
+  # ---------------------------------------------------------------------------
+  plan:
+    name: Plan + policy evaluation
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # id-token: write # OIDC to AWS
+      pull-requests: write # PR comment with the decision
+    outputs:
+      allowed: ${{ steps.evaluate.outputs.allowed }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: open-policy-agent/setup-opa@v2
+        with:
+          version: ${{ env.OPA_VERSION }}
+
+      # Use the shared registry when configured, otherwise a sidecar container.
+      - name: Start Application Registry (docker)
+        if: vars.APPID_SERVICE_URL == ''
+        uses: ./.github/actions/start-registry
+        with:
+          token: ${{ secrets.APPID_SERVICE_TOKEN }}
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="region=${AWS_REGION}"
+
+      - name: terraform plan
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform plan -var-file="$TF_VAR_FILE" -lock-timeout=5m -out=tfplan
+          terraform show -json tfplan > plan.json
+
+      - name: OPA policy evaluation
+        id: evaluate
+        env:
+          APPID_SERVICE_URL: ${{ vars.APPID_SERVICE_URL || 'http://localhost:8080' }}
+          APPID_SERVICE_TOKEN: ${{ secrets.APPID_SERVICE_TOKEN }}
+        run: |
+          set +e
+          scripts/evaluate.sh "$TF_DIR/plan.json" "$TF_DIR/decision.json" > report.md
+          rc=$?
+          set -e
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          echo "allowed=$([ $rc -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          if [ $rc -ne 0 ]; then
+            echo "::error title=Policy violation::Terraform plan denied by OPA guardrails - see job summary"
+          fi
+          exit $rc
+
+      - name: Comment decision on PR
+        if: always() && github.event_name == 'pull_request' && steps.evaluate.outcome != 'skipped'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- opa-guardrails -->';
+            const body = `${marker}\n${fs.readFileSync('report.md', 'utf8')}\n\n<sub>commit ${context.sha.slice(0, 7)}</sub>`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find(c => c.body?.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Upload evaluated plan
+        if: steps.evaluate.outputs.allowed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: tfplan
+          retention-days: 3
+          path: |
+            ${{ env.TF_DIR }}/tfplan
+            ${{ env.TF_DIR }}/plan.json
+            ${{ env.TF_DIR }}/decision.json
+            ${{ env.TF_DIR }}/.terraform.lock.hcl
+
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy (apply evaluated plan)
+    needs: plan
+    if: >-
+      needs.plan.outputs.allowed == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment: production # add required reviewers on this environment
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tfplan
+          path: ${{ env.TF_DIR }}
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Apply exactly the plan OPA approved - never re-plan here. If state
+      # moved since the plan, Terraform rejects the stale plan file.
+      - name: terraform apply
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="region=${AWS_REGION}"
+          jq -e '.allow' decision.json
+          terraform apply -lock-timeout=5m tfplan

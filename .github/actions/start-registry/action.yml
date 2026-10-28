@@ -1,0 +1,38 @@
+name: Start Application Registry
+description: >
+  Build the appid-service image and run it on localhost:8080 to simulate external
+  endpoint to perform ApplicationID lookup.
+
+inputs:
+  token:
+    description: Optional bearer token the service will require.
+    required: false
+    default: ""
+
+outputs:
+  url:
+    description: Base URL of the running registry.
+    value: http://localhost:8080
+
+runs:
+  using: composite
+  steps:
+    - name: Build image
+      shell: bash
+      run: docker build -t "appid-service:${GITHUB_SHA}" appid-service
+
+    - name: Run container and wait for health
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+      run: |
+        docker run -d --name appid-service -p 8080:8080 \
+          -e APPID_SERVICE_TOKEN="$TOKEN" "appid-service:${GITHUB_SHA}"
+        for _ in $(seq 1 30); do
+          if [ "$(docker inspect -f '{{.State.Health.Status}}' appid-service)" = "healthy" ]; then
+            curl -fsS http://localhost:8080/healthz && echo && exit 0
+          fi
+          sleep 1
+        done
+        docker logs appid-service
+        echo "::error::appid-service did not become healthy" && exit 1

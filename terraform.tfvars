@@ -1,0 +1,8 @@
+# aws_access_key = "<AWS_ACCESS_KEY_ID>"
+# aws_secret_key = "<AWS_SECRET_ACCESS_KEY>"
+region         = "us-east-1"
+name           = "opa-guardrails-demo"
+application_id = "APP-00001"
+environment    = "dev"
+owner          = "Development Team"
+cost_center    = "DEV02347434"
