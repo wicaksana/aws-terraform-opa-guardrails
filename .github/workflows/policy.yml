@@ -148,8 +148,9 @@ jobs:
           version: ${{ env.OPA_VERSION }}
 
       # Use the shared registry when configured, otherwise a sidecar container.
+      # A localhost URL can only be served by the sidecar, so start it then too.
       - name: Start Application Registry (docker)
-        if: vars.APPID_SERVICE_URL == ''
+        if: vars.APPID_SERVICE_URL == '' || contains(vars.APPID_SERVICE_URL, 'localhost')
         uses: ./.github/actions/start-registry
         with:
           token: ${{ secrets.APPID_SERVICE_TOKEN }}
