@@ -23,8 +23,38 @@ env:
   TF_INPUT: "false"
 
 jobs:
+  # Skips the other jobs when only README.md changed. Unlike `paths-ignore`, the
+  # skipped jobs still satisfy the required status checks on main.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.diff.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Ignore README-only changes
+        id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # PR runs check out the merge commit, whose first parent is main.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then base=HEAD^1; else base="$BEFORE"; fi
+          # No usable base (e.g. workflow_dispatch): run everything.
+          if ! files=$(git diff --name-only "$base" HEAD 2>/dev/null) || [ -z "$files" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Changed files:" && echo "$files"
+          if grep -qvx 'README.md' <<<"$files"; then run=true; else run=false; fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   lint:
     name: Lint
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -78,6 +108,8 @@ jobs:
   # ---------------------------------------------------------------------------
   test:
     name: Test
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
