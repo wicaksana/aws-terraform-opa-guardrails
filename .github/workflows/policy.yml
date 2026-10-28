@@ -55,7 +55,7 @@ jobs:
           tflint --init
           tflint --format compact
 
-      - uses: open-policy-agent/setup-opa@v2
+      - uses: open-policy-agent/setup-opa@v2.4.0
         with:
           version: ${{ env.OPA_VERSION }}
 
@@ -75,20 +75,6 @@ jobs:
         with:
           python-version: "3.13"
 
-      # - name: ruff
-      #   run: |
-      #     pip install --quiet ruff
-      #     ruff check appid-service
-      #     ruff format --check appid-service
-
-      # - name: hadolint
-      #   uses: hadolint/hadolint-action@v3.5.0
-      #   with:
-      #     dockerfile: appid-service/Dockerfile
-
-      # - name: shellcheck
-      #   run: shellcheck scripts/*.sh
-
   # ---------------------------------------------------------------------------
   test:
     name: Test
@@ -96,7 +82,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: open-policy-agent/setup-opa@v2
+      - uses: open-policy-agent/setup-opa@v2.4.0
         with:
           version: ${{ env.OPA_VERSION }}
 
@@ -107,14 +93,6 @@ jobs:
       - name: opa test coverage >= 90%
         shell: bash
         run: opa test policies --coverage --threshold 90 --format json | jq '{coverage}'
-
-      # - uses: actions/setup-python@v7
-      #   with:
-      #     python-version: "3.13"
-
-      # - name: appid-service unit tests
-      #   working-directory: appid-service
-      #   run: python -m unittest -v
 
       - name: Start Application Registry (docker)
         uses: ./.github/actions/start-registry
@@ -131,7 +109,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # id-token: write # OIDC to AWS
       pull-requests: write # PR comment with the decision
     outputs:
       allowed: ${{ steps.evaluate.outputs.allowed }}
@@ -143,7 +120,7 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      - uses: open-policy-agent/setup-opa@v2
+      - uses: open-policy-agent/setup-opa@v2.4.0
         with:
           version: ${{ env.OPA_VERSION }}
 
@@ -234,7 +211,6 @@ jobs:
     environment: production # add required reviewers on this environment
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v7
 
@@ -250,11 +226,10 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # Apply exactly the plan OPA approved - never re-plan here. If state
-      # moved since the plan, Terraform rejects the stale plan file.
       - name: terraform apply
         working-directory: ${{ env.TF_DIR }}
         run: |
