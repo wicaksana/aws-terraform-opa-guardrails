@@ -3,6 +3,6 @@
 region         = "us-east-1"
 name           = "opa-guardrails-demo"
 application_id = "APP-00002"
-environment    = "dev"
+environment    = "prod"
 owner          = "Development Team"
 cost_center    = "DEV02347434"
