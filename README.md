@@ -128,6 +128,58 @@ regal lint policies
 
 [.github/workflows/policy.yml](.github/workflows/policy.yml) runs on pull requests to `main`, on pushes to `main`, and manually (`workflow_dispatch`).
 
+```mermaid
+flowchart TD
+    trigger(["pull_request to main<br/>push to main<br/>workflow_dispatch"])
+    trigger --> changes
+
+    subgraph changes_job["Detect changes"]
+        changes["Diff changed files"]
+    end
+
+    changes --> readme{"Only README.md<br/>changed?"}
+    readme -- "yes" --> skipped(["Lint, Test, Plan, Deploy skipped<br/>required checks still pass"])
+    readme -- "no" --> lint & test
+
+    subgraph lint_job["Lint"]
+        lint["terraform fmt + validate<br/>tflint<br/>opa fmt + check --strict<br/>regal lint"]
+    end
+
+    subgraph test_job["Test"]
+        test["opa test<br/>coverage ≥ 90%"] --> registry1["Start appid-service<br/>(docker)"]
+        registry1 --> cases["scripts/eval-cases.sh<br/>11 sample plans"]
+    end
+
+    lint --> sidecar
+    cases --> sidecar
+
+    subgraph plan_job["Plan + policy evaluation"]
+        sidecar{"APPID_SERVICE_URL unset<br/>or localhost?"}
+        sidecar -- "yes" --> registry2["Start appid-service<br/>(docker)"]
+        sidecar -- "no" --> init
+        registry2 --> init["AWS credentials<br/>terraform init (S3 backend)"]
+        init --> tfplan["terraform plan<br/>terraform show -json"]
+        tfplan --> evaluate["scripts/evaluate.sh<br/>OPA decision + report"]
+        evaluate --> comment["Job summary<br/>PR comment (pull_request only)"]
+        evaluate --> allowed{"Plan allowed?"}
+        allowed -- "yes" --> upload["Upload artifact<br/>tfplan, plan.json, decision.json"]
+    end
+
+    allowed -- "no" --> denied(["Job fails: plan denied"])
+    upload --> gate{"push to main or<br/>workflow_dispatch?"}
+    gate -- "no (PR)" --> prdone(["Stop: decision shown on the PR"])
+    gate -- "yes" --> download
+
+    subgraph deploy_job["Deploy (apply evaluated plan) · environment: production"]
+        download["Download approved plan"] --> recheck["jq -e .allow decision.json"]
+        recheck --> apply["terraform apply tfplan"]
+    end
+
+    appid[("appid-service<br/>GET /v1/applications/ID/validate")]
+    cases -.-> appid
+    evaluate -.-> appid
+```
+
 | Job | Runs when | What it does |
 |---|---|---|
 | **Detect changes** | Always | Skips the remaining jobs when only `README.md` changed. Skipped jobs still satisfy the required checks, so documentation-only PRs can be merged. |
