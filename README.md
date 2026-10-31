@@ -5,6 +5,8 @@ with [Open Policy Agent](https://www.openpolicyagent.org/) (OPA) before it can b
 applied, so non-compliant infrastructure is stopped in the pull request instead
 of after it reaches AWS.
 
+<iframe width="560" height="315" src="https://youtu.be/XoYgyJLhkvI" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
 ## Overview
 
 ```
