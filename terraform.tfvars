@@ -2,7 +2,7 @@
 # aws_secret_key = "<AWS_SECRET_ACCESS_KEY>"
 region         = "us-east-1"
 name           = "opa-guardrails-demo"
-application_id = "APP-00002"
+application_id = "APP-1"
 environment    = "prod"
 owner          = "Development Team"
 cost_center    = "DEV02347434"
